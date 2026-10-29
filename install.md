@@ -4,7 +4,9 @@
 
 - CMake 3.22.1 or newer and a C++17 compiler.
 - Tcl 8.6 or Tcl 9 headers and its matching stub library.
-- An installed upstream-compatible cJSON development package (headers and library).
+- pkg-config (or pkgconf).
+- An installed upstream-compatible cJSON development package (headers, library,
+  and `libcjson.pc`).
   cJSON 1.7.19 is used for local validation. `cJSON_ParseWithLengthOpts` is required.
 - A matching `tclsh` with `tcltest` for tests, which are enabled by default.
 
@@ -71,9 +73,7 @@ For multi-configuration generators, pass `--config Release` when building and
 | Variable | Purpose |
 | --- | --- |
 | `CMAKE_PREFIX_PATH` | Additional installation prefixes for cJSON/Tcl discovery. |
-| `cJSON_DIR` | Directory containing upstream's `cJSONConfig.cmake`. |
-| `CJSON_INCLUDE_DIR` | Directory containing `cJSON.h`, for header/library fallback discovery. |
-| `CJSON_LIBRARY` | Full cJSON library path, for fallback discovery. |
+| `PKG_CONFIG_PATH` (environment) | Additional directories containing `libcjson.pc`. |
 | `TCL_INCLUDE_PATH` | Directory containing `tcl.h`. |
 | `TCL_STUB_LIBRARY` | Full path to the matching Tcl stub library. |
 | `TCL_TCLSH` | Matching Tcl interpreter used by shared-build tests. |
@@ -81,15 +81,12 @@ For multi-configuration generators, pass `--config Release` when building and
 | `BUILD_TESTING` | Set to `OFF` to build without test executables/interpreter. |
 | `BUILD_SHARED_LIBS` | `ON` for a loadable extension; `OFF` for a static archive. |
 
-Upstream's cJSON CMake package is preferred. For a custom installation, use
-`-DCMAKE_PREFIX_PATH=/path/to/prefix`. To bypass its package config and supply
-the exact header/library pair:
+cJSON is discovered through pkg-config's `libcjson` module, which supplies its
+include directories and linker flags. For a custom installation, use
+`-DCMAKE_PREFIX_PATH=/path/to/prefix` or point `PKG_CONFIG_PATH` at its `.pc` directory:
 
 ```sh
-cmake -S . -B build \
-  -DCMAKE_DISABLE_FIND_PACKAGE_cJSON=ON \
-  -DCJSON_INCLUDE_DIR=/usr/local/include/cjson \
-  -DCJSON_LIBRARY=/usr/local/lib/libcjson.so
+PKG_CONFIG_PATH=/usr/local/lib/pkgconfig cmake -S . -B build
 ```
 
 Headers and library must describe the same ABI. The cJSON embedded inside

@@ -1,4 +1,4 @@
-// Adapted from jerily-webserver/core/jinja2; see docs/provenance.md.
+// Adapted from jerily-webserver/core/jinja2.
 #ifndef JINJA2_TCL_ENGINE_H
 #define JINJA2_TCL_ENGINE_H
 

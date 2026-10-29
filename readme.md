@@ -1,8 +1,7 @@
 # jinja2-tcl
 
 A Tcl extension for rendering a deterministic Jinja2-style template subset against
-JSON data. The parser and renderer are copied from Jerily's `core/jinja2`; this is
-not the Python Jinja2 package and does not require Python.
+JSON data. This is not the Python Jinja2 package and does not require Python.
 
 This module was generated with help from AI.
 
@@ -74,8 +73,9 @@ lists/dictionaries do not preserve all these distinctions without type tags.
 There is a serialization/parsing cost when starting from a tjson handle; the
 renderer already copies the JSON tree into its own value model on every call.
 
-The module finds and links an **external cJSON library**. No cJSON source or header
-files are bundled, and nothing is downloaded during configuration. Do not link
+The module finds and links an **external cJSON library** through pkg-config's
+`libcjson` module. No cJSON source or header files are bundled, and nothing is
+downloaded during configuration. Do not link
 against tjson's private cJSON implementation. See the static-linking caveat in
 [install.md](install.md#static-embedding).
 
@@ -137,7 +137,7 @@ case conversion is primarily ASCII rather than Unicode-aware.
 - `src/library.cpp`: Tcl command registration, UTF-8 conversion, argument/error
   handling, JSON ownership, and the dictionary-backed template loader.
 - `src/engine/`: copied parser/renderer and the small set of string helpers it uses.
-- `cmake/`: Tcl stub and external cJSON discovery.
+- `cmake/`: Tcl stub discovery.
 - `tests/`: original C++ renderer regressions plus Tcl command/integration tests.
 - `examples/`: basic rendering, template dependencies, and optional tjson use.
 
@@ -145,6 +145,6 @@ Like tjson, this is a CMake-built native Tcl package with a namespace,
 `Jinja2_Init`, a generated `pkgIndex.tcl`, a versioned install directory, stub
 linking for shared builds, and a static build option. The C++ engine is an internal
 implementation detail. The project builds independently of either source
-repository. [Provenance](docs/provenance.md) records the copied code and changes.
+repository.
 
 MIT licensed; see [LICENSE](LICENSE).

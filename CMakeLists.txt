@@ -6,7 +6,8 @@ include(CTest)
 include(GNUInstallDirs)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(TclStub 8.6 REQUIRED)
-find_package(CJSON REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(CJSON REQUIRED IMPORTED_TARGET libcjson)
 
 # The copied engine is private; cJSON is an external dependency.
 add_library(jinja2_engine OBJECT
@@ -21,7 +22,7 @@ set_target_properties(jinja2_engine PROPERTIES
     VISIBILITY_INLINES_HIDDEN YES
 )
 target_include_directories(jinja2_engine PUBLIC src/engine)
-target_link_libraries(jinja2_engine PUBLIC CJSON::CJSON)
+target_link_libraries(jinja2_engine PUBLIC PkgConfig::CJSON)
 
 add_library(jinja2 src/library.cpp)
 target_link_libraries(jinja2 PRIVATE jinja2_engine)
@@ -68,7 +69,7 @@ if(BUILD_SHARED_LIBS)
         DESTINATION ${JINJA2_INSTALL_DIR})
 endif()
 install(FILES readme.md install.md LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
-install(FILES docs/template-language.md docs/provenance.md
+install(FILES docs/template-language.md
     DESTINATION ${CMAKE_INSTALL_DOCDIR}/docs)
 
 if(BUILD_TESTING)

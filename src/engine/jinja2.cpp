@@ -1,4 +1,4 @@
-// Adapted from jerily-webserver/core/jinja2; see docs/provenance.md.
+// Adapted from jerily-webserver/core/jinja2.
 #include "jinja2.h"
 #include "string_utils.h"
 

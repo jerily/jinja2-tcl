@@ -1,4 +1,4 @@
-// Copied helpers from jerily-webserver/core/string-utils; see docs/provenance.md.
+// Copied helpers from jerily-webserver/core/string-utils.
 #include "string_utils.h"
 #include <cctype>
 #include <cstdio>
