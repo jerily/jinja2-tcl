@@ -1,0 +1,1 @@
+package ifneeded jinja2 @PROJECT_VERSION@ [list load [file join $dir libjinja2@CMAKE_SHARED_LIBRARY_SUFFIX@] Jinja2]

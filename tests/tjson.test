@@ -1,0 +1,20 @@
+package require tcltest 2
+package require jinja2
+namespace import ::tcltest::test
+::tcltest::testConstraint tjson [expr {![catch {package require tjson}]}]
+
+test tjson-1 {typed values cross the public JSON boundary} -constraints tjson -body {
+    set typed [list M [list name {S Neo} count {N 2} enabled {BOOL 1}]]
+    ::jinja2::render {{{ name }}:{{ count }}:{{ enabled }}} [::tjson::typed_to_json $typed]
+} -result Neo:2:true
+
+test tjson-2 {JSON handles remain owned by tjson} -constraints tjson -setup {
+    set handle [::tjson::parse {{"name":"Neo","items":[1,2],"empty":null}}]
+} -body {
+    set output [::jinja2::render {{{ name }}:{{ items|sum }}:{{ empty is none }}} [::tjson::to_json $handle]]
+    list $output [::tjson::size $handle]
+} -cleanup {
+    ::tjson::destroy $handle
+} -result {Neo:3:true 3}
+
+::tcltest::cleanupTests

@@ -1,0 +1,65 @@
+# Negative and loader cases adapted from core/jinja2/tests/test_jinja2.cpp.
+package require tcltest 2
+package require jinja2
+namespace import ::tcltest::test
+
+foreach {name template expected} {
+    missing-endset {{% set stock_text %}In Stock} {*set block missing endset*}
+    invalid-set-filter {{% set stock_text | %}In Stock{% endset %}} {*expected filter name*}
+    missing-ternary-branch {{{ enabled ? 'yes' }}} {*expected `:` in ternary expression*}
+    mutating-method {{{ items.append('x') }}} {*unsupported method: append*}
+    macro-before-definition {{{ card(title) }}{% macro card(title) %}<p>{{ title }}</p>{% endmacro %}} {*undefined macro: card*}
+    empty-range {{{ range() }}} {*range() requires at least a stop argument*}
+    missing-endcall {{% macro wrap() %}{{ caller() }}{% endmacro %}{% call wrap() %}x} {*call statement missing endcall*}
+    unguarded-caller {{% macro wrap() %}<div>{{ caller() }}</div>{% endmacro %}{{ wrap() }}} {*undefined macro: caller*}
+} {
+    test validation-$name {invalid template retains the engine diagnostic} -body {
+        catch {::jinja2::validate $template} message options
+        list [dict get $options -errorcode] [string match $expected $message]
+    } -result {{JINJA2 VALIDATE} 1}
+}
+
+test validation-caller {optional caller is valid inside and outside a call block} -body {
+    ::jinja2::validate {{% macro maybe() %}{% if caller is defined %}{{ caller() }}{% else %}empty{% endif %}{% endmacro %}{% call maybe() %}body{% endcall %}:{{ maybe() }}}
+} -result 1
+
+test validation-include-macro {included macro definitions are order sensitive} -body {
+    set templates [dict create components/card.html.jinja \
+        {{% macro card(title) %}<p>{{ title }}</p>{% endmacro %}}]
+    set valid [::jinja2::validate {{% include 'components/card.html.jinja' %}{{ card(title) }}} \
+        -templates $templates -path pages/product.html.jinja]
+    catch {::jinja2::validate {{{ card(title) }}{% include 'components/card.html.jinja' %}} \
+        -templates $templates -path pages/product.html.jinja} message options
+    list $valid [dict get $options -errorcode] [string match {*undefined macro: card*} $message]
+} -result {1 {JINJA2 VALIDATE} 1}
+
+test inheritance-super {super renders across three inheritance levels} -body {
+    set templates [dict create \
+        layout/base.html.jinja {<html><body>{% block content %}Base {{ title }}{% endblock %}</body></html>} \
+        layout/mid.html.jinja {{% extends 'layout/base.html.jinja' %}{% block content %}<main>Mid {{ super() }}</main>{% endblock %}}]
+    set child {{% extends 'layout/mid.html.jinja' %}{% block content %}<article>{{ super() }} Child</article>{% endblock %}}
+    list [::jinja2::validate $child -templates $templates -path pages/product.html.jinja] \
+        [::jinja2::render $child {{"title":"Cup"}} -templates $templates -path pages/product.html.jinja]
+} -result {1 {<html><body><article><main>Mid Base Cup</main> Child</article></body></html>}}
+
+foreach {name root} {
+    include {{% include 'components/card.html.jinja' %}}
+    macro {{% macro card(title) %}<p>{{ title }}</p>{% endmacro %}}
+} {
+    test inheritance-root-$name {extending templates reject executable root content} -body {
+        set templates [dict create layout.html {{% block content %}base{% endblock %}} \
+            components/card.html.jinja {{% macro card(title) %}<p>{{ title }}</p>{% endmacro %}}]
+        set child "{% extends 'layout.html' %}$root{% block content %}{{ card(title) }}{% endblock %}"
+        catch {::jinja2::validate $child -templates $templates} message options
+        list [dict get $options -errorcode] [string match {*top-level child nodes outside blocks*} $message]
+    } -result {{JINJA2 VALIDATE} 1}
+}
+
+test included-bare-macro {zero-argument macro from an include renders by reference} -body {
+    set templates [dict create _icons.html.jinja \
+        {{% macro lucide_icon__chevron_left -%}<svg class="lucide"></svg>{%- endmacro %}}]
+    ::jinja2::render {{% include '_icons.html.jinja' %}{{ lucide_icon__chevron_left|safe }}} \
+        {{}} -templates $templates -path page.html.jinja
+} -result {<svg class="lucide"></svg>}
+
+::tcltest::cleanupTests

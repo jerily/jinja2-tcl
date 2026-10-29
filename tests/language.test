@@ -1,0 +1,447 @@
+# Render fixtures ported from core/jinja2/tests/test_jinja2.cpp.
+# Kept as ordinary Tcl tests; no source checkout or generator is needed to run them.
+package require tcltest 2
+package require jinja2
+namespace import ::tcltest::test
+
+test language-variables_and_escape_filter-1 {plain variable output is HTML escaped} -body {
+    ::jinja2::render {{{ title }}} \
+        {{"title":"Coffee & <Tea> \"Cup\""}}
+} -result {Coffee &amp; &lt;Tea&gt; &quot;Cup&quot;}
+
+test language-variables_and_escape_filter-2 {variables and escape filter render} -body {
+    ::jinja2::render {{{ title|escape }}} \
+        {{"title":"Coffee & <Tea>"}}
+} -result {Coffee &amp; &lt;Tea&gt;}
+
+test language-variables_and_escape_filter-3 {safe filter allows trusted HTML output} -body {
+    ::jinja2::render {{{ html|safe }}} \
+        {{"html":"<strong>Trusted</strong>"}}
+} -result {<strong>Trusted</strong>}
+
+test language-variables_and_escape_filter-4 {captured template markup keeps escaped dynamic output} -body {
+    ::jinja2::render {{% set panel %}<span>{{ title }}</span>{% endset %}{{ panel }}} \
+        {{"title":"<script>alert(1)</script>"}}
+} -result {<span>&lt;script&gt;alert(1)&lt;/script&gt;</span>}
+
+test language-root_object_keys_without_context_aliases-1 {top-level product and shop objects render from explicit root keys} -body {
+    ::jinja2::render {{{ product.title }} by {{ shop.name }}} \
+        {{"product":{"title":"Chef Knife"},"shop":{"name":"Artisan Kitchen"}}}
+} -result {Chef Knife by Artisan Kitchen}
+
+test language-root_object_keys_without_context_aliases-2 {renderer does not create implicit product or this aliases for the root object} -body {
+    ::jinja2::render {{{ product.title }}|{{ this.title }}} \
+        {{"title":"Root Product"}}
+} -result {|}
+
+test language-root_object_keys_without_context_aliases-3 {explicit this root key renders like any other top-level key} -body {
+    ::jinja2::render {{{ this.title }}} \
+        {{"this":{"title":"Explicit Root Key"}}}
+} -result {Explicit Root Key}
+
+test language-assignment_condition_and_default_filter-1 {set, if, comparison, and default filter render} -body {
+    ::jinja2::render {{% set label = brand|default('House') %}{% if inventory > 0 %}{{ label }} in stock{% else %}No{% endif %}} \
+        {{"brand":"","inventory":4}}
+} -result {House in stock}
+
+test language-block_assignment-1 {block set captures rendered body} -body {
+    ::jinja2::render {{% set greeting %}Hi {{ name }}{% endset %}{{ greeting }}} \
+        {{"name":"Ada"}}
+} -result {Hi Ada}
+
+test language-block_assignment-2 {block set captures nested conditional body} -body {
+    ::jinja2::render {{% set stock_text %}{% if variant.inventory_count > 10 %}In Stock{% elif variant.inventory_count > 0 %}Low Stock{% else %}Out of Stock{% endif %}{% endset %}{{ stock_text|trim }}} \
+        {{"variant":{"inventory_count":4}}}
+} -result {Low Stock}
+
+test language-block_assignment-3 {block set supports filtered capture} -body {
+    ::jinja2::render "{% set stock_text | trim | upper %}\n low stock \n{% endset %}{{ stock_text }}" \
+        {{}}
+} -result {LOW STOCK}
+
+test language-conditional_expression-1 {inline conditional expression renders loop.first branch} -body {
+    ::jinja2::render {{% for image in json_images %}<button class="thumb {{ 'active' if loop.first else '' }}" data-index="{{ loop.index0 }}" data-preview="{{ image.preview_url|escape }}">{{ loop.index }}</button>{% endfor %}} \
+        {{"json_images":[{"preview_url":"https://example.test/one?a=1&b=2"},{"preview_url":"https://example.test/two"}]}}
+} -result {<button class="thumb active" data-index="0" data-preview="https://example.test/one?a=1&amp;b=2">1</button><button class="thumb " data-index="1" data-preview="https://example.test/two">2</button>}
+
+test language-conditional_expression-2 {inline conditional expression renders else branch} -body {
+    ::jinja2::render {{{ 'yes' if enabled else 'no' }}} \
+        {{"enabled":false}}
+} -result {no}
+
+test language-conditional_expression-3 {inline conditional expression without else renders empty false branch} -body {
+    ::jinja2::render {{{ 'yes' if enabled }}} \
+        {{"enabled":false}}
+} -result {}
+
+test language-conditional_expression-4 {inline conditional expression works inside list literal} -body {
+    ::jinja2::render {{{ ['a' if first else 'b', 'c']|join('|') }}} \
+        {{"first":true}}
+} -result {a|c}
+
+test language-conditional_expression-5 {c-style ternary expression renders true branch} -body {
+    ::jinja2::render {{{ allow_out_of_stock_orders ? 'backorder' : 'out-of-stock' }}} \
+        {{"allow_out_of_stock_orders":true}}
+} -result {backorder}
+
+test language-conditional_expression-6 {c-style ternary expression renders false branch} -body {
+    ::jinja2::render {{{ allow_out_of_stock_orders ? 'backorder' : 'out-of-stock' }}} \
+        {{"allow_out_of_stock_orders":false}}
+} -result {out-of-stock}
+
+test language-conditional_expression-7 {c-style ternary expression is right associative} -body {
+    ::jinja2::render {{{ primary ? 'primary' : secondary ? 'secondary' : 'none' }}} \
+        {{"primary":false,"secondary":true}}
+} -result {secondary}
+
+test language-conditional_expression-8 {c-style ternary expression works in set statements} -body {
+    ::jinja2::render {{% set stock_class = allow_out_of_stock_orders ? 'backorder' : 'out-of-stock' %}{{ stock_class }}} \
+        {{"allow_out_of_stock_orders":false}}
+} -result {out-of-stock}
+
+test language-for_loop_and_loop_metadata-1 {for loop and loop metadata render} -body {
+    ::jinja2::render {{% for variant in variants %}{{ loop.index }}:{{ variant.name }}{% if not loop.last %}|{% endif %}{% endfor %}} \
+        {{"variants":[{"name":"Small"},{"name":"Large"}]}}
+} -result {1:Small|2:Large}
+
+test language-for_loop_and_loop_metadata-2 {range renders positional and keyword numeric loops} -body {
+    ::jinja2::render {{% for index in range(3) %}{{ index }}{% endfor %}:{% for index in range(1, 6, 2) %}{{ index }}{% endfor %}:{% for index in range(start=5, stop=0, step=-2) %}{{ index }}{% endfor %}} \
+        {{}}
+} -result {012:135:531}
+
+test language-for_else_branch-1 {for else branch renders} -body {
+    ::jinja2::render {{% for item in items %}{{ item }}{% else %}empty{% endfor %}} \
+        {{"items":[]}}
+} -result {empty}
+
+test language-list_literals-1 {empty list literal renders} -body {
+    ::jinja2::render {{{ []|length }}} \
+        {{}}
+} -result {0}
+
+test language-list_literals-2 {list literal supports expressions and trailing comma} -body {
+    ::jinja2::render {{% set names = ['A', title,] %}{{ names|join('|') }}} \
+        {{"title":"B"}}
+} -result {A|B}
+
+test language-list_literals-3 {list concatenation preserves arrays} -body {
+    ::jinja2::render {{% set names = ['A'] %}{% set names = names + [title] %}{{ names|join('|') }}} \
+        {{"title":"B"}}
+} -result {A|B}
+
+test language-list_literals-4 {list literal supports subscript lookup} -body {
+    ::jinja2::render {{{ ['small', 'large'][1] }}} \
+        {{}}
+} -result {large}
+
+test language-list_literals-5 {list literal supports membership checks} -body {
+    ::jinja2::render {{% if title in ['A', 'B'] %}yes{% else %}no{% endif %}} \
+        {{"title":"B"}}
+} -result {yes}
+
+test language-list_literals-6 {list literal supports negated membership checks} -body {
+    ::jinja2::render {{% if title not in ['A', 'B'] %}yes{% else %}no{% endif %}} \
+        {{"title":"C"}}
+} -result {yes}
+
+test language-list_literals-7 {empty list literal works in loops} -body {
+    ::jinja2::render {{% for item in [] %}{{ item }}{% else %}empty{% endfor %}} \
+        {{}}
+} -result {empty}
+
+test language-list_literals-8 {empty list literal works as a filter argument} -body {
+    ::jinja2::render {{% for item in missing|default([]) %}{{ item }}{% else %}empty{% endfor %}} \
+        {{}}
+} -result {empty}
+
+test language-subscript_and_slice_expressions-1 {string subscript renders indexed character} -body {
+    ::jinja2::render {{{ title[1] }}} \
+        {{"title":"fresh"}}
+} -result {r}
+
+test language-subscript_and_slice_expressions-2 {string subscript supports defined checks} -body {
+    ::jinja2::render {{{ title[1] is defined }}} \
+        {{"title":"fresh"}}
+} -result {true}
+
+test language-subscript_and_slice_expressions-3 {string slice works with upper and escape filters} -body {
+    ::jinja2::render {{{ title[:20]|upper|e }}} \
+        {{"title":"fresh & spicy things today"}}
+} -result {FRESH &amp; SPICY THINGS}
+
+test language-subscript_and_slice_expressions-4 {string slice supports omitted end} -body {
+    ::jinja2::render {{{ title[6:] }}} \
+        {{"title":"hello world"}}
+} -result {world}
+
+test language-subscript_and_slice_expressions-5 {string slice supports explicit start and end} -body {
+    ::jinja2::render {{{ title[0:5] }}} \
+        {{"title":"hello world"}}
+} -result {hello}
+
+test language-subscript_and_slice_expressions-6 {array slice renders selected range} -body {
+    ::jinja2::render {{{ ['a', 'b', 'c', 'd'][1:3]|join('|') }}} \
+        {{}}
+} -result {b|c}
+
+test language-basic_filter_compatibility-1 {replace filter renders} -body {
+    ::jinja2::render {{{ 'hello there'|replace('there', 'world') }}} \
+        {{}}
+} -result {hello world}
+
+test language-basic_filter_compatibility-2 {sort filter renders} -body {
+    ::jinja2::render {{{ ['b', 'a', 'c']|sort|join('') }}} \
+        {{}}
+} -result {abc}
+
+test language-basic_filter_compatibility-3 {min, max, and sum filters render} -body {
+    ::jinja2::render {{{ [3, 1, 2]|min }}:{{ [3, 1, 2]|max }}:{{ [3, 1, 2]|sum }}} \
+        {{}}
+} -result {1:3:6}
+
+test language-basic_filter_compatibility-4 {numeric conversion filters render} -body {
+    ::jinja2::render {{{ (-4)|abs }}:{{ '42.9'|int }}:{{ '3.5'|float }}:{{ 3.6|round }}} \
+        {{}}
+} -result {4:42:3.5:4}
+
+test language-basic_filter_compatibility-5 {wordcount and urlencode filters render} -body {
+    ::jinja2::render {{{ 'alpha beta <em>gamma</em>'|wordcount }}:{{ 'a b&c'|urlencode }}} \
+        {{}}
+} -result {3:a%20b%26c}
+
+test language-basic_filter_compatibility-6 {truncate and list filters render} -body {
+    ::jinja2::render {{{ 'abcdef'|truncate(5) }}:{{ 'abc'|list|join('|') }}} \
+        {{}}
+} -result {ab...:a|b|c}
+
+test language-basic_filter_compatibility-7 {dictsort filter renders key value pairs} -body {
+    ::jinja2::render {{% for pair in {'b': 2, 'a': 1}|dictsort %}{{ pair.key }}={{ pair.value }};{% endfor %}} \
+        {{}}
+} -result {a=1;b=2;}
+
+test language-basic_filter_compatibility-8 {batch and slice filters render grouped arrays} -body {
+    ::jinja2::render {{{ [1, 2, 3, 4, 5]|batch(2, 0)|tojson }}:{{ [1, 2, 3, 4, 5]|slice(2)|tojson }}} \
+        {{}}
+} -result {[[1,2],[3,4],[5,0]]:[[1,2],[3,4],[5]]}
+
+test language-basic_filter_compatibility-9 {keyword filter arguments render} -body {
+    ::jinja2::render {{{ [{'name': 'b'}, {'name': 'a'}]|sort(attribute='name')|join(d='|', attribute='name') }}} \
+        {{}}
+} -result {a|b}
+
+test language-basic_filter_compatibility-10 {attr and format filters render} -body {
+    ::jinja2::render {{{ data|attr('title') }}:{{ '%s $%.2f'|format(data.title, data.price) }}} \
+        {{"data":{"title":"Cup","price":12.5}}}
+} -result {Cup:Cup $12.50}
+
+test language-basic_filter_compatibility-11 {map filter supports attributes and nested filters} -body {
+    ::jinja2::render {{{ users|map(attribute='name')|join('|') }}:{{ users|map('attr', 'name')|join('|') }}:{{ ['a', 'b']|map('upper')|join('') }}} \
+        {{"users":[{"name":"Ada"},{"name":"Grace"}]}}
+} -result {Ada|Grace:Ada|Grace:AB}
+
+test language-basic_filter_compatibility-12 {groupby filter renders grouped lists} -body {
+    ::jinja2::render {{% for group in users|groupby('role') %}{{ group.grouper }}={{ group.list|map(attribute='name')|join(',') }};{% endfor %}} \
+        {{"users":[{"name":"Ada","role":"admin"},{"name":"Grace","role":"editor"},{"name":"Linus","role":"admin"}]}}
+} -result {admin=Ada,Linus;editor=Grace;}
+
+test language-basic_filter_compatibility-13 {select and reject filters render by test} -body {
+    ::jinja2::render {{{ [1, 2, 3, 4]|select('odd')|join('|') }}:{{ [1, 2, 3, 4]|reject('odd')|join('|') }}} \
+        {{}}
+} -result {1|3:2|4}
+
+test language-basic_filter_compatibility-14 {selectattr and rejectattr filters render by attribute tests} -body {
+    ::jinja2::render {{{ users|selectattr('active')|map(attribute='name')|join('|') }}:{{ users|rejectattr('active')|map(attribute='name')|join('|') }}:{{ users|selectattr('role', 'eq', 'admin')|map(attribute='name')|join('|') }}} \
+        {{"users":[{"name":"Ada","active":true,"role":"admin"},{"name":"Grace","active":false,"role":"editor"},{"name":"Linus","active":true,"role":"admin"}]}}
+} -result {Ada|Linus:Grace:Ada|Linus}
+
+test language-basic_filter_compatibility-15 {unique filter preserves first unique items} -body {
+    ::jinja2::render {{{ ['A', 'a', 'b', 'A']|unique|join('|') }}:{{ ['A', 'a', 'b', 'A']|unique(case_sensitive=true)|join('|') }}:{{ users|unique(attribute='role')|map(attribute='name')|join('|') }}} \
+        {{"users":[{"name":"Ada","role":"admin"},{"name":"Grace","role":"editor"},{"name":"Linus","role":"admin"}]}}
+} -result {A|b:A|a|b:Ada|Grace}
+
+test language-basic_method_compatibility-1 {string method chain renders} -body {
+    ::jinja2::render {{{ '  Alpha Beta  '.strip().lower().replace(' ', '-') }}} \
+        {{}}
+} -result {alpha-beta}
+
+test language-basic_method_compatibility-2 {split and join methods render in chained expressions} -body {
+    ::jinja2::render {{{ 'a,b,c'.split(',').join('|') }}:{{ '|'.join('a,b,c'.split(',')) }}} \
+        {{}}
+} -result {a|b|c:a|b|c}
+
+test language-basic_method_compatibility-3 {startswith and endswith methods render booleans} -body {
+    ::jinja2::render {{{ 'sale:wide'.startswith('sale') }}:{{ 'sale:wide'.endswith('wide') }}} \
+        {{}}
+} -result {true:true}
+
+test language-basic_method_compatibility-4 {object methods render keys values items and get} -body {
+    ::jinja2::render {{% for key, value in data.items() %}{{ key }}={{ value }};{% endfor %}{{ data.keys().join('|') }}:{{ data.values().join('|') }}:{{ data.get('missing', 'fallback') }}:{{ data.get('a') }}} \
+        {{"data":{"b":2,"a":1}}}
+} -result {a=1;b=2;a|b:1|2:fallback:1}
+
+test language-basic_test_compatibility-1 {basic parity and case tests render} -body {
+    ::jinja2::render {{% if 4 is even and 3 is odd and 'ABC' is upper and 'abc' is lower %}yes{% else %}no{% endif %}} \
+        {{}}
+} -result {yes}
+
+test language-basic_test_compatibility-2 {basic type tests render} -body {
+    ::jinja2::render {{% if title is string and price is number and items is iterable and data is mapping and items is sequence %}yes{% else %}no{% endif %}} \
+        {{"title":"Cup","price":4,"items":[1],"data":{"a":1}}}
+} -result {yes}
+
+test language-basic_test_compatibility-3 {comparison alias tests render} -body {
+    ::jinja2::render {{% if 5 is gt(3) and 5 is ge(5) and 3 is lt(5) and 3 is le(3) and 'a' is eq('a') and 'a' is ne('b') %}yes{% else %}no{% endif %}} \
+        {{}}
+} -result {yes}
+
+test language-basic_test_compatibility-4 {undefined test renders} -body {
+    ::jinja2::render {{% if missing is undefined and title is not undefined %}yes{% else %}no{% endif %}} \
+        {{"title":"Cup"}}
+} -result {yes}
+
+test language-basic_expression_compatibility-1 {object and tuple literals render} -body {
+    ::jinja2::render {{{ {'b': 2, 'a': 1}.a }}:{{ (1, 2, 3)|join('|') }}} \
+        {{}}
+} -result {1:1|2|3}
+
+test language-basic_expression_compatibility-2 {integer division and power operators render} -body {
+    ::jinja2::render {{{ 7 // 2 }}:{{ 2 ** 3 }}} \
+        {{}}
+} -result {3:8}
+
+test language-basic_expression_compatibility-3 {macro keyword arguments render} -body {
+    ::jinja2::render {{% macro label(text, suffix='!') %}{{ text }}{{ suffix }}{% endmacro %}{{ label(suffix='?', text='Hi') }}} \
+        {{}}
+} -result {Hi?}
+
+test language-loop_unpacking_and_filter_condition-1 {for loop supports unpacking and if filters} -body {
+    ::jinja2::render {{% for name, qty in rows if qty > 1 %}{{ loop.index }}/{{ loop.length }}:{{ name }}={{ qty }}{% if not loop.last %}|{% endif %}{% else %}empty{% endfor %}} \
+        {{"rows":[["a",1],["b",2],["c",3]]}}
+} -result {1/2:b=2|2/2:c=3}
+
+test language-loop_unpacking_and_filter_condition-2 {for loop unpacks object key value pairs} -body {
+    ::jinja2::render {{% for key, value in data %}{{ key }}={{ value }};{% endfor %}} \
+        {{"data":{"b":2,"a":1}}}
+} -result {a=1;b=2;}
+
+test language-set_updates_nearest_existing_binding-1 {set inside a loop updates the nearest existing binding} -body {
+    ::jinja2::render {{% set found = false %}{% for item in items %}{% if item == 'B' %}{% set found = true %}{% endif %}{% endfor %}{{ found }}} \
+        {{"items":["A","B","C"]}}
+} -result {true}
+
+test language-set_updates_nearest_existing_binding-2 {for loop variables remain local when they share an outer name} -body {
+    ::jinja2::render {{% set item = 'outer' %}{% for item in items %}{{ item }}{% endfor %}:{{ item }}} \
+        {{"items":["A","B"]}}
+} -result {AB:outer}
+
+test language-set_updates_nearest_existing_binding-3 {nested loop accumulator can deduplicate list entries} -body {
+    ::jinja2::render {{% set all_keys = [] %}{% for v in variants %}{% for c in v.characteristics %}{% if c.key not in all_keys %}{% set all_keys = all_keys + [c.key] %}{% endif %}{% endfor %}{% endfor %}{{ all_keys|join('|') }}} \
+        {{"variants":[{"characteristics":[{"key":"Color"},{"key":"Size"}]},{"characteristics":[{"key":"Color"},{"key":"Material"}]}]}}
+} -result {Color|Size|Material}
+
+test language-defined_test-1 {present null field is defined} -body {
+    ::jinja2::render {{% if title is defined %}yes{% else %}no{% endif %}} \
+        {{"title":null}}
+} -result {yes}
+
+test language-defined_test-2 {missing top-level field is not defined} -body {
+    ::jinja2::render {{% if missing is defined %}yes{% else %}no{% endif %}} \
+        {{}}
+} -result {no}
+
+test language-defined_test-3 {present dotted field is defined} -body {
+    ::jinja2::render {{% if variant.inventory_count is defined %}yes{% else %}no{% endif %}} \
+        {{"variant":{"inventory_count":0}}}
+} -result {yes}
+
+test language-defined_test-4 {missing dotted field supports is not defined} -body {
+    ::jinja2::render {{% if variant.missing is not defined %}yes{% else %}no{% endif %}} \
+        {{"variant":{"inventory_count":0}}}
+} -result {yes}
+
+test language-defined_test-5 {bracket lookup supports defined test} -body {
+    ::jinja2::render {{{ variants[1].name is defined }}} \
+        {{"variants":[{"name":"Small"},{"name":"Large"}]}}
+} -result {true}
+
+test language-defined_test-6 {compound defined expression parses and renders} -body {
+    ::jinja2::render {{% set allow_out_of_stock_orders = false %}{% for variant in variants %}{% if (variant.inventory_count == 0 and not allow_out_of_stock_orders) or (variant.inventory_count is defined and variant.inventory_count <= 0) %}empty{% else %}ok{% endif %}{% endfor %}} \
+        {{"variants":[{"inventory_count":0}]}}
+} -result {empty}
+
+test language-none_test-1 {present null field is none} -body {
+    ::jinja2::render {{% if inventory is none %}none{% else %}value{% endif %}} \
+        {{"inventory":null}}
+} -result {none}
+
+test language-none_test-2 {present object field is not none} -body {
+    ::jinja2::render {{% if inventory is not none %}value{% else %}none{% endif %}} \
+        {{"inventory":{"count":3}}}
+} -result {value}
+
+test language-none_test-3 {undefined value is distinct from none} -body {
+    ::jinja2::render {{{ missing is not none }}} \
+        {{}}
+} -result {true}
+
+test language-none_test-4 {compound none test expression parses and renders} -body {
+    ::jinja2::render {{% if shipping or policies or (inventory is defined and inventory is not none) or inventory_count is defined %}show{% else %}hide{% endif %}} \
+        {{"shipping":false,"policies":false,"inventory":{"count":3}}}
+} -result {show}
+
+test language-macro_and_tojson_filter-1 {macro defaults and tojson render} -body {
+    ::jinja2::render {{% macro chip(text, suffix='!') %}<span>{{ text|escape }}{{ suffix }}</span>{% endmacro %}{{ chip(title) }}<script type="application/json">{{ payload|tojson }}</script>} \
+        {{"title":"A \"quoted\" cup","payload":{"title":"A \"quoted\" cup"}}}
+} -result {<span>A &quot;quoted&quot; cup!</span><script type="application/json">{"title":"A \"quoted\" cup"}</script>}
+
+test language-bare_zero_required_macro_reference-1 {bare zero-argument macro reference renders the macro body} -body {
+    ::jinja2::render {{% macro icon -%}<svg>{{ label }}</svg>{%- endmacro %}{{ icon|safe }}} \
+        {{"label":"Mark"}}
+} -result {<svg>Mark</svg>}
+
+test language-bare_zero_required_macro_reference-2 {bare macro reference renders when all parameters have defaults} -body {
+    ::jinja2::render {{% macro badge(text='New') %}<span>{{ text }}</span>{% endmacro %}{{ badge }}} \
+        {{}}
+} -result {<span>New</span>}
+
+test language-bare_zero_required_macro_reference-3 {bare macro reference with required parameters remains empty} -body {
+    ::jinja2::render {{% macro badge(text) %}<span>{{ text }}</span>{% endmacro %}{{ badge|safe }}x} \
+        {{}}
+} -result {x}
+
+test language-bare_zero_required_macro_reference-4 {local variable shadows bare macro reference} -body {
+    ::jinja2::render {{% macro icon -%}<svg></svg>{%- endmacro %}{% set icon = 'text' %}{{ icon }}} \
+        {{}}
+} -result {text}
+
+test language-call_blocks-1 {call block renders caller body inside target macro} -body {
+    ::jinja2::render {{% macro panel(title) %}<section><h2>{{ title|e }}</h2>{{ caller() }}</section>{% endmacro %}{% call panel('Specs') %}<p>{{ description|e }}</p>{% endcall %}} \
+        {{"description":"Fast & light"}}
+} -result {<section><h2>Specs</h2><p>Fast &amp; light</p></section>}
+
+test language-call_blocks-2 {call block supports no-argument macro shorthand} -body {
+    ::jinja2::render {{% macro shell() %}<div>{{ caller() }}</div>{% endmacro %}{% call shell %}plain{% endcall %}} \
+        {{}}
+} -result {<div>plain</div>}
+
+test language-call_blocks-3 {call block supports caller parameters} -body {
+    ::jinja2::render {{% macro render_list(items) %}{% for item in items %}[{{ caller(item) }}]{% endfor %}{% endmacro %}{% call(item) render_list(items) %}{{ item.name|e }}{% endcall %}} \
+        {{"items":[{"name":"One"},{"name":"Two & More"}]}}
+} -result {[One][Two &amp; More]}
+
+test language-call_blocks-4 {nested call blocks restore caller bindings} -body {
+    ::jinja2::render {{% macro wrap(label) %}<{{ label }}>{{ caller() }}</{{ label }}>{% endmacro %}{% call wrap('a') %}{% call wrap('b') %}x{% endcall %}{% endcall %}} \
+        {{}}
+} -result {<a><b>x</b></a>}
+
+test language-call_blocks-5 {call block restores an existing caller macro} -body {
+    ::jinja2::render {{% macro caller() %}outer{% endmacro %}{% macro wrap() %}{{ caller() }}{% endmacro %}{% call wrap() %}inner{% endcall %}:{{ caller() }}} \
+        {{}}
+} -result {inner:outer}
+
+test language-call_blocks-6 {call block exposes caller as a defined macro only during the call} -body {
+    ::jinja2::render {{% macro maybe() %}{% if caller is defined %}{{ caller() }}{% else %}empty{% endif %}{% endmacro %}{% call maybe() %}body{% endcall %}:{{ maybe() }}} \
+        {{}}
+} -result {body:empty}
+
+::tcltest::cleanupTests

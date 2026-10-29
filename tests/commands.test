@@ -1,0 +1,139 @@
+package require tcltest 2
+package require jinja2 0.1.0
+namespace import ::tcltest::test
+
+test package-1 {package and command registration} -body {
+    list [package present jinja2] [lsort [info commands ::jinja2::*]]
+} -result {0.1.0 {::jinja2::render ::jinja2::supported_concepts ::jinja2::validate}}
+
+test render-1 {HTML escaping and typed JSON values} -body {
+    ::jinja2::render {<p>{{ name }}|{{ n + 2 }}|{{ flag }}|{{ absent is none }}</p>} \
+        {{"name":"<Neo & Co>","n":3,"flag":true,"absent":null}}
+} -result {<p>&lt;Neo &amp; Co&gt;|5|true|true</p>}
+
+test render-2 {loops and scoped assignments} -body {
+    ::jinja2::render {{% set total = 0 %}{% for x in xs %}{% set total = total + x %}{{ loop.index }}={{ x }};{% endfor %}{{ total }}} \
+        {{"xs":[2,3]}}
+} -result {1=2;2=3;5}
+
+test render-3 {macros, safe markup, and HTML-safe JSON} -body {
+    ::jinja2::render {{% macro greet(x) %}<b>{{ x }}</b>{% endmacro %}{{ greet(name) }}|{{ name|tojson }}} \
+        {{"name":"<Neo>"}}
+} -result {<b>&lt;Neo&gt;</b>|"\u003cNeo\u003e"}
+
+test render-4 {Tcl code in data is never evaluated} -body {
+    unset -nocomplain ::jinja2_test_evaluated
+    set output [::jinja2::render {{{ text }}} {{"text":"[set ::jinja2_test_evaluated 1]"}}]
+    list $output [info exists ::jinja2_test_evaluated]
+} -result {{[set ::jinja2_test_evaluated 1]} 0}
+
+test render-5 {render state does not leak between calls} -body {
+    ::jinja2::render {{% set secret = 'hidden' %}} {{}}
+    ::jinja2::render {{{ secret|default('missing') }}} {{}}
+} -result missing
+
+test unicode-1 {non-ASCII and non-BMP text round trips through Tcl} -body {
+    set smile [encoding convertfrom utf-8 [binary decode hex f09f9880]]
+    set output [::jinja2::render {Καλημέρα {{ name }} {{ emoji }}} \
+        {{"name":"世界","emoji":"\ud83d\ude00"}}]
+    expr {$output eq "Καλημέρα 世界 $smile"}
+} -result 1
+
+test unicode-2 {literal non-BMP data and template content use standard UTF-8} -body {
+    set smile [encoding convertfrom utf-8 [binary decode hex f09f9880]]
+    set output [::jinja2::render "$smile {{ text }}" [format {{"text":"%s"}} $smile]]
+    expr {$output eq "$smile $smile"}
+} -result 1
+
+test unicode-3 {NUL in template text is preserved} -body {
+    set text "a\0b"
+    expr {[::jinja2::render $text {{}}] eq $text}
+} -result 1
+
+foreach {name json} {
+    empty {}
+    malformed {not-json}
+    trailing {{"x":1} trailing}
+    array {[1,2]}
+    null {null}
+    scalar {true}
+    nul {{"x":"\u0000"}}
+    nul-key {{"a\u0000b":1}}
+    overflow {{"x":1e999}}
+} {
+    test json-$name {invalid or unsupported JSON context returns a structured error} -body {
+        catch {::jinja2::render {{{ x }}} $json} message options
+        dict get $options -errorcode
+    } -result {JINJA2 JSON}
+}
+
+test json-nul-literal {actual NUL must not silently truncate input} -body {
+    catch {::jinja2::render text "{}\0trailing"} message options
+    dict get $options -errorcode
+} -result {JINJA2 JSON}
+
+test json-escaped-slash {escaped backslash before u0000 is ordinary text} -body {
+    ::jinja2::render {{{ x }}} {{"x":"\\u0000"}}
+} -result {\u0000}
+
+test json-whitespace {trailing whitespace is permitted} -body {
+    ::jinja2::render {{{ x }}} "{\"x\":1} \n\t"
+} -result 1
+
+test validate-1 {valid template returns true} -body {
+    ::jinja2::validate {{% if yes %}{{ value }}{% endif %}}
+} -result 1
+
+test validate-2 {invalid template raises a Tcl error} -body {
+    catch {::jinja2::validate {{% if x %}}} message options
+    dict get $options -errorcode
+} -result {JINJA2 VALIDATE}
+
+test render-error {undefined macro raises a Tcl error} -body {
+    catch {::jinja2::render {{{ missing() }}} {{}}} message options
+    dict get $options -errorcode
+} -result {JINJA2 RENDER}
+
+test supported-1 {supported subset description is available} -body {
+    string match {*Supported Jinja2 subset:*} [::jinja2::supported_concepts]
+} -result 1
+
+foreach script {
+    {::jinja2::render}
+    {::jinja2::render text}
+    {::jinja2::validate}
+    {::jinja2::supported_concepts extra}
+} {
+    test args-[incr args_index] {wrong argument count} -body {
+        catch $script message options
+        dict get $options -errorcode
+    } -result {TCL WRONGARGS}
+}
+
+foreach tail {
+    {-bogus value}
+    {-templates}
+    {-templates {bad dict value}}
+    {-templates {} -templates {}}
+    {-path root -path root}
+    {-path root}
+} {
+    test options-[incr option_index] {invalid options return structured errors} -body {
+        catch {::jinja2::render text {{}} {*}$tail} message options
+        dict get $options -errorcode
+    } -result {JINJA2 OPTION}
+}
+
+test interpreter-1 {commands can be loaded into an independent interpreter} -setup {
+    interp create jinja2_child
+    interp eval jinja2_child [list set auto_path $auto_path]
+} -body {
+    interp eval jinja2_child {
+        if {[catch {load {} Jinja2}]} {package require jinja2}
+        ::jinja2::render {{{ name }}} {{"name":"child"}}
+    }
+} -cleanup {
+    interp delete jinja2_child
+} -result child
+
+::tcltest::cleanupTests

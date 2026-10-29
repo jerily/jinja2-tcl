@@ -1,0 +1,50 @@
+package require tcltest 2
+package require jinja2
+namespace import ::tcltest::test
+
+test templates-1 {include, inheritance, and super use caller-provided templates} -body {
+    set templates [dict create \
+        layout.html {<main>{% block body %}base{% endblock %}</main>} \
+        parts/name.html {<b>{{ name }}</b>}]
+    set text {{% extends 'layout.html' %}{% block body %}{{ super() }}:{% include 'parts/name.html' %}{% endblock %}}
+    list [::jinja2::validate $text -templates $templates -path child.html] \
+        [::jinja2::render $text {{"name":"Neo"}} -templates $templates -path child.html]
+} -result {1 <main>base:<b>Neo</b></main>}
+
+test templates-2 {includes require a supplied dictionary} -body {
+    catch {::jinja2::validate {{% include 'missing.html' %}}} message options
+    dict get $options -errorcode
+} -result {JINJA2 VALIDATE}
+
+test templates-3 {missing templates fail validation and rendering} -body {
+    set text {{% include 'missing.html' %}}
+    catch {::jinja2::validate $text -templates {}} message validate_options
+    catch {::jinja2::render $text {{}} -templates {}} message render_options
+    list [dict get $validate_options -errorcode] [dict get $render_options -errorcode]
+} -result {{JINJA2 VALIDATE} {JINJA2 RENDER}}
+
+foreach path {/etc/passwd ../secret ./secret a//b a/../b {a\b}} {
+    test path-[incr path_index] {unsafe paths are rejected even if supplied} -body {
+        set text [format {{%% include '%s' %%}} $path]
+        catch {::jinja2::validate $text -templates [dict create $path contents]} message options
+        dict get $options -errorcode
+    } -result {JINJA2 VALIDATE}
+}
+
+test templates-4 {include cycles fail} -body {
+    set text {{% include 'a.html' %}}
+    catch {::jinja2::validate $text -templates [dict create a.html $text]} message options
+    dict get $options -errorcode
+} -result {JINJA2 VALIDATE}
+
+test templates-5 {dynamic includes fail} -body {
+    catch {::jinja2::validate {{% include name %}} -templates {}} message options
+    dict get $options -errorcode
+} -result {JINJA2 VALIDATE}
+
+test templates-6 {supplied root path is validated} -body {
+    catch {::jinja2::validate text -templates {} -path ../root} message options
+    dict get $options -errorcode
+} -result {JINJA2 VALIDATE}
+
+::tcltest::cleanupTests
