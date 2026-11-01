@@ -1,0 +1,14 @@
+{
+  "name": "jinja2-tcl",
+  "version": "1.0.0",
+  "scripts": {
+
+  },
+  "dependencies": {
+    "cjson": "^1.7.19",
+    "tcl": "^9.1.0"
+  },
+  "devDependencies": {
+
+  }
+}
