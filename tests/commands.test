@@ -4,7 +4,7 @@ namespace import ::tcltest::test
 
 test package-1 {package and command registration} -body {
     list [package present jinja2] [lsort [info commands ::jinja2::*]]
-} -result {0.1.0 {::jinja2::render ::jinja2::supported_concepts ::jinja2::validate}}
+} -result {0.1.1 {::jinja2::render ::jinja2::supported_concepts ::jinja2::validate}}
 
 test render-1 {HTML escaping and typed JSON values} -body {
     ::jinja2::render {<p>{{ name }}|{{ n + 2 }}|{{ flag }}|{{ absent is none }}</p>} \

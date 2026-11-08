@@ -24,21 +24,34 @@ if(EXISTS "${TCL_INCLUDE_PATH}/tcl.h")
 endif()
 
 if(TCL_VERSION MATCHES "^([0-9]+)\\.([0-9]+)")
+  set(TCL_ABI_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}")
   # Prefer the selected ABI rather than an unrelated generic stub library.
   if(CMAKE_MATCH_1 GREATER_EQUAL 9)
     set(TCL_STUB_NAMES tclstub tclstub${CMAKE_MATCH_1}.${CMAKE_MATCH_2}
         tclstub${CMAKE_MATCH_1}${CMAKE_MATCH_2})
   else()
     set(TCL_STUB_NAMES tclstub${CMAKE_MATCH_1}.${CMAKE_MATCH_2}
-        tclstub${CMAKE_MATCH_1}${CMAKE_MATCH_2} tclstub)
+        tclstub${CMAKE_MATCH_1}${CMAKE_MATCH_2})
   endif()
   set(TCL_TCLSH_NAMES tclsh${CMAKE_MATCH_1}.${CMAKE_MATCH_2} tclsh${CMAKE_MATCH_1}${CMAKE_MATCH_2}
       tclsh${CMAKE_MATCH_1}${CMAKE_MATCH_2}t)
 endif()
 
-find_library(TCL_STUB_LIBRARY NAMES ${TCL_STUB_NAMES}
-  HINTS ${TCL_LIBRARY_DIR} "${TCL_INCLUDE_PATH_PARENT}/lib"
-)
+if(TCL_LIBRARY_DIR)
+  # An explicit installation must not fall back to a host Tcl library.
+  find_library(TCL_STUB_LIBRARY
+    NAMES ${TCL_STUB_NAMES} NAMES_PER_DIR
+    PATHS "${TCL_LIBRARY_DIR}"
+    PATH_SUFFIXES tcl${TCL_ABI_VERSION}
+    NO_DEFAULT_PATH
+  )
+else()
+  find_library(TCL_STUB_LIBRARY
+    NAMES ${TCL_STUB_NAMES} NAMES_PER_DIR
+    HINTS "${TCL_INCLUDE_PATH_PARENT}/lib"
+    PATH_SUFFIXES tcl${TCL_ABI_VERSION}
+  )
+endif()
 
 find_program(TCL_TCLSH
   NAMES ${TCL_TCLSH_NAMES} tclsh NAMES_PER_DIR

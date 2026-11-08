@@ -104,7 +104,7 @@ header under `include/jinja2`, and documentation under `share/doc/jinja2`.
 If the prefix is outside Tcl's package search path, add the package directory:
 
 ```tcl
-lappend auto_path [file join $env(HOME) .local lib jinja20.1.0]
+lappend auto_path [file join $env(HOME) .local lib jinja20.1.1]
 package require jinja2 0.1.0
 ```
 
