@@ -22,13 +22,14 @@ The source supports Tcl 8.6 and Tcl 9, with a separate build for each major ABI.
 | --- | --- |
 | `::jinja2::render template json ?-templates dictionary? ?-path name?` | Rendered text; raises a Tcl error on failure. |
 | `::jinja2::validate template ?-templates dictionary? ?-path name?` | `1` on success; raises a Tcl error on failure. |
+| `::jinja2::environment ?-loader commandPrefix? ?-templates dictionary?` | A command owning a loader and a parsed-template cache. |
 | `::jinja2::supported_concepts` | Description of the supported template language. |
 
 The JSON context must be an object. Use `{{}}` in Tcl source to pass the JSON text
 `{}` for an empty context. Context keys become template variables; there is no
 implicit `this` or `product` alias. Ordinary strings are HTML-escaped by default.
-Each call owns its context and renderer state. No handles, `destroy` command,
-template cache, or implicit global context are needed.
+Each render owns its context and renderer state. The string-based commands remain
+stateless; an optional environment caches parsed templates across renders.
 
 `validate` checks syntax, supported operations, macro references, and supplied
 include/inheritance dependencies. It does not take a context or guarantee that
@@ -44,6 +45,54 @@ if {[catch {::jinja2::validate $template} message options]} {
 Errors use `JINJA2 JSON`, `JINJA2 OPTION`, `JINJA2 RENDER`, `JINJA2 VALIDATE`,
 `JINJA2 MEMORY`, or `JINJA2 INTERNAL`. Wrong argument counts use `TCL WRONGARGS`.
 No partial output is returned on a rendering failure.
+
+## Loading templates by name
+
+An environment calls a trusted Tcl command prefix only when it needs a template.
+The loader receives one additional argument, the relative template name, and
+returns its text or raises an error. Creating the environment reads nothing.
+
+```tcl
+proc load_template {directory name} {
+    # Template names are trusted application identifiers, not request paths.
+    set channel [open [file join $directory $name] r]
+    try {
+        chan configure $channel -encoding utf-8
+        read $channel
+    } finally {close $channel}
+}
+set pages [::jinja2::environment -loader [list load_template /app/templates]]
+puts [$pages render article.html.jinja {{"title":"First request"}}]
+puts [$pages render article.html.jinja {{"title":"Next request"}}]
+$pages destroy
+```
+
+The root template, inherited layouts, and executed includes are loaded and parsed
+once per environment. An include in an unexecuted conditional branch is not read.
+Request data and rendered output are never cached. Optional `-templates` entries
+override the loader, allowing separate environments to compose different layouts.
+
+| Environment method | Behavior |
+| --- | --- |
+| `render name json` | Render a named template with fresh request data. |
+| `load name` | Preload and parse one template without rendering it or traversing dependencies. |
+| `validate name` | Check the template and its dependency graph, including unexecuted branches. |
+| `loaded` | List cached template names. |
+| `clear` | Discard parsed templates; retain the loader and overrides. |
+| `destroy` | Delete the command and release its cache and loader. |
+
+Use `validate` during packaging/CI for every template in the artifact. A successful
+render alone does not validate unexecuted branches. Eager hosts can call `load` for
+each artifact template during initialization; lazy hosts just call `render`.
+
+Caches are local to an environment in one interpreter and persist until `clear`,
+`destroy`, or interpreter deletion. Files are not checked for changes automatically.
+Use separate environments for different mounts or tenant overrides. Loader and
+parse failures are retryable; successfully cached dependencies remain available.
+Recursive use of an active environment raises `JINJA2 BUSY`; preload failures use
+`JINJA2 LOAD`. The loader must enforce filesystem boundaries, including symlinks,
+when reading files. The engine rejects absolute paths, dot segments, backslashes,
+empty segments, NULs, and control characters before invoking the loader.
 
 ## Using tjson
 

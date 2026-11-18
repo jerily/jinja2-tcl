@@ -3943,6 +3943,12 @@ public:
         return ok;
     }
 
+    std::vector<std::string> names() const {
+        std::vector<std::string> result;
+        for (const auto &entry : cache) result.push_back(entry.first);
+        return result;
+    }
+
 private:
     bool validate_template_graph(const Template &template_value,
                                  std::set<std::string> &visiting,
@@ -4501,6 +4507,33 @@ bool RenderContext::render_template_file(const std::string &path, std::string &o
 }
 
 }  // namespace
+
+struct TemplateCache::Impl {
+    const TemplateFileSystem &filesystem;
+    TemplateRepository repository;
+    explicit Impl(const TemplateFileSystem &fs) : filesystem(fs), repository(&fs) {}
+};
+TemplateCache::TemplateCache(const TemplateFileSystem &fs) : impl(std::make_unique<Impl>(fs)) {}
+TemplateCache::~TemplateCache() = default;
+RenderResult TemplateCache::render(const std::string &name, const cJSON *context) {
+    RenderResult result;
+    RenderContext request(context);
+    request.repository = &impl->repository;
+    result.ok = impl->repository.render_template_file(name, request, result.output, result.error);
+    return result;
+}
+bool TemplateCache::load(const std::string &name, std::string &error) {
+    const Template *parsed = nullptr;
+    return impl->repository.load_template(name, parsed, error);
+}
+bool TemplateCache::validate(const std::string &name, std::string &error) {
+    const Template *parsed = nullptr;
+    return impl->repository.load_template(name, parsed, error) &&
+        impl->repository.validate_template_graph(*parsed, error) &&
+        impl->repository.validate_template_semantics(*parsed, error);
+}
+void TemplateCache::clear() { impl = std::make_unique<Impl>(impl->filesystem); }
+std::vector<std::string> TemplateCache::names() const { return impl->repository.names(); }
 
 bool TemplateFileSystem::exists_file(const std::string &path) const {
     std::string content;
