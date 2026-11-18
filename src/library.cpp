@@ -10,6 +10,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -27,6 +28,24 @@ struct DString {
     ~DString() { Tcl_DStringFree(&value); }
     DString(const DString &) = delete;
     DString &operator=(const DString &) = delete;
+};
+
+struct ObjRef {
+    Tcl_Obj *object;
+    explicit ObjRef(Tcl_Obj *value) : object(value) { Tcl_IncrRefCount(object); }
+    ~ObjRef() { Tcl_DecrRefCount(object); }
+    ObjRef(const ObjRef &) = delete;
+    ObjRef &operator=(const ObjRef &) = delete;
+};
+
+struct InterpState {
+    Tcl_Interp *interp;
+    Tcl_InterpState state;
+    explicit InterpState(Tcl_Interp *value)
+        : interp(value), state(Tcl_SaveInterpState(value, TCL_OK)) {}
+    ~InterpState() { Tcl_RestoreInterpState(interp, state); }
+    InterpState(const InterpState &) = delete;
+    InterpState &operator=(const InterpState &) = delete;
 };
 
 // Tcl 8.6 strings use modified UTF-8; cJSON and the renderer use standard UTF-8.
@@ -182,6 +201,31 @@ bool finite_numbers(const cJSON *node) {
 // Serialize parsing across Tcl threads; no allocator hooks are changed by this module.
 Tcl_Mutex json_mutex;
 
+using Json = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
+Json parse_context(Tcl_Interp *interp, const Utf8 &utf8, Tcl_Obj *object) {
+    const std::string json = utf8.get(object);
+    if (contains_json_nul(json)) {
+        error(interp, "JSON", "JSON context must not contain NUL characters (including \\u0000)"); return Json(nullptr, cJSON_Delete);
+    }
+    const char *end = nullptr;
+    Tcl_MutexLock(&json_mutex);
+    cJSON *parsed = cJSON_ParseWithLengthOpts(json.c_str(), json.size() + 1, &end, 1);
+    Tcl_MutexUnlock(&json_mutex);
+    Json context(parsed, cJSON_Delete);
+    if (!context) {
+        const std::string message = "invalid JSON context at UTF-8 byte " +
+                                    std::to_string(end == nullptr ? 0 : end - json.c_str());
+        error(interp, "JSON", message.c_str()); return Json(nullptr, cJSON_Delete);
+    }
+    if (!cJSON_IsObject(context.get())) {
+        error(interp, "JSON", "JSON context must be an object"); return Json(nullptr, cJSON_Delete);
+    }
+    if (!finite_numbers(context.get())) {
+        error(interp, "JSON", "JSON context numbers must be finite"); return Json(nullptr, cJSON_Delete);
+    }
+    return context;
+}
+
 int render(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) {
     if (objc < 3) {
         Tcl_WrongNumArgs(interp, 1, objv, "template json ?-templates dictionary? ?-path name?");
@@ -192,26 +236,8 @@ int render(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) {
     if (read_options(interp, objc, objv, 3, utf8, options) != TCL_OK) {
         return TCL_ERROR;
     }
-    const std::string json = utf8.get(objv[2]);
-    if (contains_json_nul(json)) {
-        return error(interp, "JSON", "JSON context must not contain NUL characters (including \\u0000)");
-    }
-    const char *end = nullptr;
-    Tcl_MutexLock(&json_mutex);
-    cJSON *parsed = cJSON_ParseWithLengthOpts(json.c_str(), json.size() + 1, &end, 1);
-    Tcl_MutexUnlock(&json_mutex);
-    const std::unique_ptr<cJSON, decltype(&cJSON_Delete)> context(parsed, cJSON_Delete);
-    if (!context) {
-        const std::string message = "invalid JSON context at UTF-8 byte " +
-                                    std::to_string(end == nullptr ? 0 : end - json.c_str());
-        return error(interp, "JSON", message.c_str());
-    }
-    if (!cJSON_IsObject(context.get())) {
-        return error(interp, "JSON", "JSON context must be an object");
-    }
-    if (!finite_numbers(context.get())) {
-        return error(interp, "JSON", "JSON context numbers must be finite");
-    }
+    const auto context = parse_context(interp, utf8, objv[2]);
+    if (!context) return TCL_ERROR;
     const std::string text = utf8.get(objv[1]);
     const engine::RenderResult result = options.has_templates
         ? engine::render_template(text, context.get(), options.templates, options.path)
@@ -243,6 +269,109 @@ int validate(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) {
     }
     Tcl_SetObjResult(interp, Tcl_NewBooleanObj(1));
     return TCL_OK;
+}
+
+
+// Each command owns its loader, overrides and parsed-template cache. Copying
+// the shared owner during dispatch also makes deletion by a loader safe.
+struct Environment final : engine::TemplateFileSystem {
+    Tcl_Interp *interp;
+    Tcl_Obj *loader = nullptr;
+    Tcl_Command token = nullptr;
+    std::map<std::string, std::string> overrides;
+    engine::TemplateCache cache;
+    bool busy = false;
+    explicit Environment(Tcl_Interp *i) : interp(i), cache(*this) {}
+    ~Environment() override { if (loader) Tcl_DecrRefCount(loader); }
+    bool read_file(const std::string &path, std::string &content, std::string &message) const override {
+        const auto found = overrides.find(path);
+        if (found != overrides.end()) { content = found->second; return true; }
+        if (!loader) { message = "template not supplied: " + path; return false; }
+        const Utf8 utf8(interp);
+        const InterpState saved(interp);
+        const ObjRef call(Tcl_DuplicateObj(loader));
+        utf8.result(interp, path);
+        Tcl_ListObjAppendElement(interp, call.object, Tcl_GetObjResult(interp));
+        TclSize count = 0; Tcl_Obj **words = nullptr;
+        int status = Tcl_ListObjGetElements(interp, call.object, &count, &words);
+        if (status == TCL_OK) status = Tcl_EvalObjv(interp, count, words, TCL_EVAL_GLOBAL);
+        if (status == TCL_OK) content = utf8.get(Tcl_GetObjResult(interp));
+        else message = utf8.get(Tcl_GetObjResult(interp));
+        return status == TCL_OK;
+    }
+};
+using EnvironmentOwner = std::shared_ptr<Environment>;
+void delete_environment(ClientData data) { delete static_cast<EnvironmentOwner *>(data); }
+
+int environment_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) noexcept {
+    const auto env = *static_cast<EnvironmentOwner *>(data);
+    try {
+        if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "render|load|validate|loaded|clear|destroy ?args?"); return TCL_ERROR; }
+        const Utf8 utf8(interp);
+        const std::string operation = utf8.get(objv[1]);
+        if (operation == "destroy" && objc == 2) { Tcl_DeleteCommandFromToken(interp, env->token); return TCL_OK; }
+        if (env->busy) return error(interp, "BUSY", "template environment is already rendering or validating");
+        struct Guard { bool &busy; explicit Guard(bool &b) : busy(b) { busy = true; } ~Guard() { busy = false; } } guard(env->busy);
+        if (operation == "clear" && objc == 2) { env->cache.clear(); return TCL_OK; }
+        if (operation == "loaded" && objc == 2) {
+            const ObjRef names(Tcl_NewListObj(0, nullptr));
+            for (const auto &name : env->cache.names()) {
+                utf8.result(interp, name);
+                Tcl_ListObjAppendElement(interp, names.object, Tcl_GetObjResult(interp));
+            }
+            Tcl_SetObjResult(interp, names.object); return TCL_OK;
+        }
+        if (operation == "validate" && objc == 3) {
+            std::string message;
+            if (!env->cache.validate(utf8.get(objv[2]), message)) return engine_error(interp, utf8, "VALIDATE", message);
+            Tcl_SetObjResult(interp, Tcl_NewBooleanObj(1)); return TCL_OK;
+        }
+        if (operation == "load" && objc == 3) {
+            std::string message;
+            if (!env->cache.load(utf8.get(objv[2]), message)) return engine_error(interp, utf8, "LOAD", message);
+            Tcl_SetObjResult(interp, Tcl_NewBooleanObj(1)); return TCL_OK;
+        }
+        if (operation == "render" && objc == 4) {
+            const auto context = parse_context(interp, utf8, objv[3]);
+            if (!context) return TCL_ERROR;
+            const auto result = env->cache.render(utf8.get(objv[2]), context.get());
+            if (!result.ok) return engine_error(interp, utf8, "RENDER", result.error);
+            utf8.result(interp, result.output); return TCL_OK;
+        }
+        return error(interp, "OPTION", "expected render name json, load name, validate name, loaded, clear or destroy");
+    } catch (const std::bad_alloc &) { return error(interp, "MEMORY", "unable to allocate memory for template processing"); }
+    catch (const std::exception &exception) { return error(interp, "INTERNAL", exception.what()); }
+    catch (...) { return error(interp, "INTERNAL", "template environment failed"); }
+}
+
+int environment(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) {
+    if ((objc - 1) % 2) { Tcl_WrongNumArgs(interp, 1, objv, "?-loader commandPrefix? ?-templates dictionary?"); return TCL_ERROR; }
+    const Utf8 utf8(interp);
+    auto env = std::make_shared<Environment>(interp);
+    bool supplied_templates = false;
+    for (int i = 1; i < objc; i += 2) {
+        const auto option = utf8.get(objv[i]);
+        if (option == "-loader" && !env->loader) {
+            TclSize length = 0;
+            if (Tcl_ListObjLength(interp, objv[i+1], &length) != TCL_OK) return TCL_ERROR;
+            if (!length) return error(interp, "OPTION", "-loader must be a nonempty command prefix");
+            env->loader = objv[i+1]; Tcl_IncrRefCount(env->loader);
+        } else if (option == "-templates" && !supplied_templates) {
+            Options options;
+            if (read_options(interp, 2, objv+i, 0, utf8, options) != TCL_OK) return TCL_ERROR;
+            env->overrides = std::move(options.templates.files); supplied_templates = true;
+        } else return error(interp, "OPTION", "unknown or duplicate environment option");
+    }
+    auto *serial = static_cast<unsigned long long *>(Tcl_GetAssocData(interp, "jinja2.environments", nullptr));
+    if (!serial) {
+        serial = new unsigned long long(0);
+        Tcl_SetAssocData(interp, "jinja2.environments", [](ClientData p, Tcl_Interp *) { delete static_cast<unsigned long long *>(p); }, serial);
+    }
+    std::string name;
+    Tcl_CmdInfo existing;
+    do { name = "::jinja2::environment" + std::to_string(++*serial); } while (Tcl_GetCommandInfo(interp, name.c_str(), &existing));
+    env->token = Tcl_CreateObjCommand(interp, name.c_str(), environment_command, new EnvironmentOwner(env), delete_environment);
+    utf8.result(interp, name); return TCL_OK;
 }
 
 int supported(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) {
@@ -285,6 +414,7 @@ extern "C" int Jinja2_Init(Tcl_Interp *interp) {
         Tcl_CreateNamespace(interp, "::jinja2", nullptr, nullptr) == nullptr) {
         return TCL_ERROR;
     }
+    Tcl_CreateObjCommand(interp, "::jinja2::environment", dispatch<environment>, nullptr, nullptr);
     Tcl_CreateObjCommand(interp, "::jinja2::render", dispatch<render>, nullptr, nullptr);
     Tcl_CreateObjCommand(interp, "::jinja2::validate", dispatch<validate>, nullptr, nullptr);
     Tcl_CreateObjCommand(interp, "::jinja2::supported_concepts", dispatch<supported>, nullptr, nullptr);

@@ -1,0 +1,130 @@
+package require tcltest 2
+package require jinja2
+namespace import ::tcltest::test
+
+namespace eval ::envtest {
+    variable reads {}
+    variable files {}
+    proc load {name} {
+        variable reads; variable files
+        lappend reads $name
+        if {![dict exists $files $name]} {error "missing $name"}
+        dict get $files $name
+    }
+}
+
+test environment-1 {creation reads nothing; rendering caches only reached templates} -setup {
+    set ::envtest::reads {}
+    set ::envtest::files [dict create \
+        page {{% extends 'layout' %}{% block body %}{{ name }}{% if detail %}{% include 'detail' %}{% endif %}{% endblock %}} \
+        layout {<main>{% block body %}{% endblock %}</main>} detail {!} unused {{% broken %}}]
+    set e [::jinja2::environment -loader ::envtest::load]
+} -body {
+    set before $::envtest::reads
+    set first [$e render page {{"name":"A","detail":false}}]
+    set reads $::envtest::reads
+    set second [$e render page {{"name":"B","detail":true}}]
+    list $before $first $reads $second $::envtest::reads [$e loaded]
+} -cleanup {$e destroy} -result {{} <main>A</main> {page layout} <main>B!</main> {page layout detail} {detail layout page}}
+
+test environment-2 {mounts have isolated overrides and explicit invalidation} -setup {
+    set ::envtest::reads {}
+    set ::envtest::files {body old}
+    set a [::jinja2::environment -loader ::envtest::load]
+    set b [::jinja2::environment -loader ::envtest::load -templates {body override}]
+} -body {
+    set result [list [$a render body {{}}] [$b render body {{}}]]
+    dict set ::envtest::files body new
+    lappend result [$a render body {{}}]
+    $a clear
+    lappend result [$a loaded] [$a render body {{}}] [$b render body {{}}] $::envtest::reads
+} -cleanup {$a destroy; $b destroy} -result {old override old {} new override {body body}}
+
+test environment-3 {loader failures and parse failures can be retried} -setup {
+    set ::envtest::files {}
+    set e [::jinja2::environment -loader ::envtest::load]
+} -body {
+    catch {$e render body {{}}} missing options
+    set code [dict get $options -errorcode]
+    dict set ::envtest::files body {{% invalid %}}
+    catch {$e render body {{}}} invalid
+    set loaded [$e loaded]
+    dict set ::envtest::files body good
+    list $code [string match {*missing body*} $missing] $loaded [$e render body {{}}]
+} -cleanup {$e destroy} -result {{JINJA2 RENDER} 1 {} good}
+
+test environment-4 {validation visits dependencies in unexecuted branches} -setup {
+    set ::envtest::files {root {{% if show %}{% include 'missing' %}{% endif %}}}
+    set e [::jinja2::environment -loader ::envtest::load]
+} -body {
+    set rendered [$e render root {{"show":false}}]
+    catch {$e validate root} message options
+    list $rendered [dict get $options -errorcode]
+} -cleanup {$e destroy} -result {{} {JINJA2 VALIDATE}}
+
+test environment-5 {cycles and traversal fail without poisoning subsequent renders} -setup {
+    set ::envtest::reads {}
+    set ::envtest::files {a {{% include 'b' %}} b {{% include 'a' %}} safe yes}
+    set e [::jinja2::environment -loader ::envtest::load]
+} -body {
+    catch {$e render ../secret {{}}} message options
+    set traversal [dict get $options -errorcode]
+    set reads $::envtest::reads
+    catch {$e render a {{}}} message options
+    list $traversal $reads [dict get $options -errorcode] [$e render safe {{}}]
+} -cleanup {$e destroy} -result {{JINJA2 RENDER} {} {JINJA2 RENDER} yes}
+
+test environment-6 {loader receives a literal Unicode name and command prefix arguments} -setup {
+    proc ::envtest::literal {prefix name} {return "$prefix$name"}
+    set e [::jinja2::environment -loader [list ::envtest::literal {🦋:}]]
+} -body {
+    $e render {é[error bad];☃} {{}}
+} -cleanup {$e destroy; rename ::envtest::literal {}} -result {🦋:é[error bad];☃}
+
+test environment-7 {deleting a renamed environment inside its loader is safe} -setup {
+    proc ::envtest::deleting {name} {::envtest::renamed destroy; return done}
+    set e [::jinja2::environment -loader ::envtest::deleting]
+    rename $e ::envtest::renamed
+} -body {
+    list [::envtest::renamed render body {{}}] [info commands ::envtest::renamed]
+} -cleanup {rename ::envtest::deleting {}} -result {done {}}
+
+test environment-8 {a loader cannot recursively render or clear its active cache} -setup {
+    proc ::envtest::recursive {name} {
+        catch {$::envtest::e clear} message options
+        set ::envtest::code [dict get $options -errorcode]
+        return safe
+    }
+    set ::envtest::e [::jinja2::environment -loader ::envtest::recursive]
+} -body {
+    list [$::envtest::e render body {{}}] $::envtest::code
+} -cleanup {$::envtest::e destroy; rename ::envtest::recursive {}} -result {safe {JINJA2 BUSY}}
+
+test environment-9 {JSON rules match the string rendering API} -setup {
+    set e [::jinja2::environment -templates {body text}]
+} -body {
+    set codes {}
+    foreach json {null {[]} {bad} {{"x":1e999}} {{"x":"\u0000"}}} {
+        catch {$e render body $json} message options
+        lappend codes [dict get $options -errorcode]
+    }
+    set codes
+} -cleanup {$e destroy} -result {{JINJA2 JSON} {JINJA2 JSON} {JINJA2 JSON} {JINJA2 JSON} {JINJA2 JSON}}
+
+test environment-10 {prewarming parses named templates without rendering or loading their dependencies} -setup {
+    set ::envtest::reads {}
+    set ::envtest::files {root {{% include 'child' %}} child {Hello {{ name }}}}
+    set e [::jinja2::environment -loader ::envtest::load]
+} -body {
+    set result [list [$e load root] $::envtest::reads]
+    $e load child
+    lappend result [$e render root {{"name":"A"}}] [$e render root {{"name":"B"}}] $::envtest::reads
+} -cleanup {$e destroy} -result {1 root {Hello A} {Hello B} {root child}}
+
+foreach arguments {{-loader {}} {-loader x -loader y} {-templates {} -templates {}} {-unknown x} {-loader}} {
+    test environment-option-[incr option_index] {invalid environment options are rejected} -body {
+        catch {::jinja2::environment {*}$arguments}
+    } -result 1
+}
+
+::tcltest::cleanupTests
